@@ -4,7 +4,7 @@ const cors = require("cors");
 const app = express();
 const bodyParser = require("body-parser");
 const shortId = require("shortid");
-const validUrl = require("valid-url");
+const dns = require("dns");
 const { log } = require("console");
 
 /** Set up mongoose */
@@ -23,7 +23,7 @@ const urlSchema = new mongoose.Schema({
 });
 
 /** Create the URL model */
-const URL = mongoose.model("URL", urlSchema);
+const URLModel = mongoose.model("URL", urlSchema);
 
 // Basic Configuration
 const port = process.env.PORT || 3000;
@@ -39,61 +39,79 @@ app.use(bodyParser.json());
 app.use("/public", express.static(__dirname + "/public"));
 
 // LOG REQUEST INFORMATION
-app.use((req, res, next) => {
+app.use((req, _res, next) => {
   log(`${req.method} ${req.path} - ${req.ip}`);
   next();
 });
 
 // HOME PAGE ROUTING
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   const absolutePath = __dirname + "/views/index.html";
   res.sendFile(absolutePath);
 });
 
 // shorurl API endpoint
+
+// dns middleware
+app.post("/api/shorturl", function (req, res, next) {
+  const { url } = req.body;
+
+  let urlObject = new URL(url);
+
+  dns.lookup(urlObject.hostname, (lookupErr, addresses) => {
+    if (lookupErr) {
+      console.log("lookup() error");
+    }
+    // lookup() returns either _undefined_ or _an IP address_
+    // if undefined , send a JSON object detailing the invalid nature of the request
+    if (!addresses) {
+      res.json({
+        error: "invalid URL",
+      });
+    } else {
+      next();
+    }
+  });
+});
+
 app.post("/api/shorturl", async function (req, res) {
   const { url } = req.body;
-  if (!validUrl.isUri(url)) {
-    res.status(401).json({
-      error: "Invalid Url",
-    });
-  } else {
-    try {
-      // Check if the url is already in th db
-      let urlEntry = await URL.findOne({
-        original_url: url,
-      });
 
-      if (urlEntry) {
-        return res.json({
-          original_url: urlEntry.original_url,
-          short_url: urlEntry.short_url,
-        });
-      } else {
-        // If the url is not been already shortened, then create a new entry
-        // on the db and response with the result
-        const short_url = shortId.generate();
-        urlEntry = new URL({
-          original_url: url,
-          short_url,
-        });
-        await urlEntry.save();
-        res.json({
-          original_url: url,
-          short_url,
-        });
-      }
-    } catch (err) {
-      log(err);
-      res.status(500).json("Server error...");
+  try {
+    // Check if the url is already in th db
+    let urlEntry = await URLModel.findOne({
+      original_url: url,
+    });
+
+    if (urlEntry) {
+      return res.json({
+        original_url: urlEntry.original_url,
+        short_url: urlEntry.short_url,
+      });
+    } else {
+      // If the url is not been already shortened, then create a new entry
+      // on the db and response with the result
+      const short_url = shortId.generate();
+      urlEntry = new URLModel({
+        original_url: url,
+        short_url,
+      });
+      await urlEntry.save();
+      res.json({
+        original_url: url,
+        short_url,
+      });
     }
+  } catch (err) {
+    log(err);
+    res.status(500).json("Server error...");
   }
 });
 
 // Redirect shorturl to original url
 app.get("/api/shorturl/:short_url", async function (req, res) {
   try {
-    const urlFromDB = await URL.findOne({
+    const urlFromDB = await URLModel.findOne({
       short_url: req.params.short_url,
     });
     if (urlFromDB) {
